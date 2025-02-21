@@ -46,10 +46,13 @@ class StarkNetConfig:
     FLEX_MARKETPLACE = "0x04d0390b777b424e43839cd1e744799f3de6c176c7e32c1812a41dbd9c19db6a"
     UNFRAMED_MARKETPLACE = "0x051734077ba7baf5765896c56ce41f3c4f5b4e66cec5852b43867c580ce0d203"
 
-    # Gas estimation safety margins
-    GAS_MARGIN = 1.2  # 20% extra for safety
+    # Dynamic gas configuration
+    GAS_MARGIN = 1.5  # 50% safety margin
     MAX_RETRIES = 3
     RETRY_DELAY = 2  # seconds
+    MIN_GAS_PRICE = int(1e10)  # 10 Gwei minimum
+    MAX_GAS_PRICE = int(5e13)  # 50,000 Gwei maximum
+    GAS_PRICE_UPDATE_INTERVAL = 60  # seconds
 
 class StarkNetTool(SwarmBaseTool):
     """Tool for interacting with StarkNet."""
@@ -403,39 +406,69 @@ class StarkNetTool(SwarmBaseTool):
         except Exception as e:
             return f"Volume building failed: {str(e)}"
 
-    async def estimate_gas(self, tx) -> int:
-        """Estimate gas for a transaction with safety margin."""
+    async def get_current_gas_price(self) -> int:
+        """Get current L1 gas price with safety margin."""
         try:
-            estimated = await self.client.estimate_fee(tx)
-            return int(estimated.overall_fee * self.GAS_MARGIN)
+            # Get latest block
+            block = await self.client.get_block("latest")
+            current_gas_price = block.l1_gas_price.price_in_wei
+            
+            # Apply safety margin
+            gas_price = int(current_gas_price * self.GAS_MARGIN)
+            
+            # Ensure gas price is within bounds
+            gas_price = max(self.MIN_GAS_PRICE, min(gas_price, self.MAX_GAS_PRICE))
+            
+            return gas_price
         except Exception as e:
-            raise Exception(f"Gas estimation failed: {str(e)}")
-
-    async def simulate_transaction(self, tx) -> Dict:
-        """Simulate a transaction before sending."""
-        try:
-            simulation = await self.client.simulate_transaction(tx)
-            return {
-                "success": simulation.status == "ACCEPTED",
-                "gas_used": simulation.gas_used,
-                "gas_price": simulation.gas_price,
-                "fee": simulation.fee
-            }
-        except Exception as e:
-            raise Exception(f"Simulation failed: {str(e)}")
+            # Return a conservative default if estimation fails
+            return int(3e13)  # 30,000 Gwei
 
     async def execute_with_retry(self, func, *args, **kwargs) -> Any:
-        """Execute a function with retry mechanism."""
+        """Execute a function with dynamic gas price and retry mechanism."""
         last_error = None
+        
         for attempt in range(self.MAX_RETRIES):
             try:
-                return await func(*args, **kwargs)
+                # Update gas price before each attempt
+                current_gas_price = await self.get_current_gas_price()
+                
+                # Update resource bounds with current gas price
+                kwargs['max_fee'] = current_gas_price
+                
+                # Execute transaction
+                result = await func(*args, **kwargs)
+                return result
+                
             except Exception as e:
                 last_error = e
+                if "gas price" in str(e).lower():
+                    # Increase gas price for next attempt
+                    self.GAS_MARGIN *= 1.2
+                
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(self.RETRY_DELAY * (attempt + 1))
                 continue
+                
         raise Exception(f"Operation failed after {self.MAX_RETRIES} attempts: {str(last_error)}")
+
+    async def simulate_transaction(self, tx) -> Dict:
+        """Simulate a transaction with dynamic gas estimation."""
+        try:
+            # Get current gas price
+            gas_price = await self.get_current_gas_price()
+            
+            # Simulate with current gas price
+            simulation = await self.client.simulate_transaction(tx)
+            
+            return {
+                "success": simulation.status == "ACCEPTED",
+                "gas_used": simulation.gas_used,
+                "gas_price": gas_price,
+                "fee": int(simulation.gas_used * gas_price * self.GAS_MARGIN)
+            }
+        except Exception as e:
+            raise Exception(f"Simulation failed: {str(e)}")
 
     async def execute_marketplace_action(
         self,

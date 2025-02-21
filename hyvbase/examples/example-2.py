@@ -1,136 +1,83 @@
-from hyvbase.main import HyvBase
+"""
+Example 2: Advanced StarkNet Trading with Dynamic Gas Management and Memory Optimization
+
+This example demonstrates:
+1. Dynamic gas price management
+2. Memory optimization
+3. Autonomous market monitoring
+4. Natural language command processing
+5. Error handling and retries
+"""
+
 import asyncio
+import os
 from datetime import datetime
+from dotenv import load_dotenv
+from hyvbase.main import HyvBase
+from hyvbase.config import HyvBaseConfig
 
 async def main():
-    hyv = HyvBase()
+    # Initialize HyvBase with custom memory configuration
+    config = HyvBaseConfig(
+        features={
+            'vector_db': True  # Enable vector database
+        },
+        tool_configs={
+            'memory': {
+                'max_cache_size': 2000,      # Store more items in cache
+                'cache_ttl': 7200,           # Keep items for 2 hours
+                'cleanup_interval': 600,      # Clean up every 10 minutes
+            },
+            'twitter': {
+                'rate_limit': 60,
+                'retry_count': 3
+            },
+            'telegram': {
+                'rate_limit': 30,
+                'retry_count': 3
+            },
+            'starknet': {
+                'rate_limit': 30,
+                'retry_count': 3
+            }
+        }
+    )
+    hyv = HyvBase(config)
     
-    # Create an autonomous crypto agent
+    # Create agent with autonomous capabilities
     agent = await hyv.create_autonomous_agent(
         agent_type="dex",
-        name="CryptoAgent",
+        name="TradingAgent",
         tools=["starknet", "dex"],
         personality_config={
-            "name": "Alex",
-            "role": "Crypto Operations Specialist",
-            "traits": ["precise", "security-focused", "helpful"],
-            "expertise": ["Token Swaps", "Crypto Transfers", "DeFi Operations"],
-            "speaking_style": "Professional and clear",
-            "language_tone": "formal"
+            "name": "TradingBot",
+            "role": "Advanced trading assistant",
+            "traits": ["analytical", "cautious", "efficient"],
+            "expertise": ["DeFi", "trading", "market analysis"]
         },
         autonomous_config={
             "market_monitoring": True,
-            "auto_trading": False,
-            "monitoring_interval": 60,
+            "auto_trading": False,  # Set to True to enable automated trading
+            "monitoring_interval": 30,  # Check market every 30 seconds
             "risk_limits": {
-                "max_trade_size": 1.0,
-                "max_daily_trades": 5
+                "max_trade_size": 0.5,  # Maximum 0.5 ETH per trade
+                "max_daily_trades": 3,   # Maximum 3 trades per day
+                "min_profit_threshold": 0.02  # 2% minimum profit
             }
         }
     )
 
-    print("\nCryptoAgent is ready! Type 'exit' to quit, 'memory <query>' to search history")
-    print("Example: 'memory ETH trades' or 'memory recent conversations'\n")
-
-    async def handle_command(cmd: str):
-        """Process user input and store in vector memory"""
-        # Store user message
-        await hyv.store_chat_memory(
-            agent_name="CryptoAgent",
-            message=cmd,
-            role="user"
-        )
-        
-        # Get agent's response
-        response = await agent.process_command(cmd)
-        print(f"\nAgent: {response}\n")
-        
-        # Store agent's response
-        await hyv.store_chat_memory(
-            agent_name="CryptoAgent",
-            message=response,
-            role="agent"
-        )
-        
-        # If it's a transaction-like command, store it
-        if any(kw in cmd.lower() for kw in ["swap", "trade", "transfer", "buy", "sell"]):
-            await hyv.store_transaction(
-                agent_name="CryptoAgent",
-                transaction_data={
-                    "type": cmd.split()[0].lower(),  # First word as transaction type
-                    "description": cmd,
-                    "response": response,
-                    "status": "processed",
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-        
-        return response
-
-    async def search_memory(query: str):
-        """Search both chat and transaction history"""
-        # Get both chat and transaction history
-        chats = await hyv.query_chat_history(
-            query=query,
-            agent_name="CryptoAgent",
-            k=5
-        )
-        
-        txns = await hyv.query_transactions(
-            query=query,
-            agent_name="CryptoAgent",
-            k=3
-        )
-
-        # Format and return results
-        results = []
-        if chats:
-            results.append("\nRelevant Conversations:")
-            for chat in chats:
-                results.append(f"{chat['metadata']['role']}: {chat['metadata']['message']}")
-        
-        if txns:
-            results.append("\nRelevant Transactions:")
-            for tx in txns:
-                tx_data = tx['metadata']['transaction']
-                results.append(f"- {tx_data['description']}")
-                if tx_data.get('response'):
-                    results.append(f"  Response: {tx_data['response']}")
-                if tx_data.get('quote'):
-                    results.append(f"  Quote: {tx_data['quote']}")
-
-        return "\n".join(results) if results else "No relevant history found."
-
-    # Main interaction loop
-    while True:
-        try:
-            cmd = input("You: ").strip()
-            if cmd.lower() == 'exit':
-                break
-
-            if cmd.lower().startswith('memory'):
-                query = cmd[7:].strip()  # Remove 'memory ' from the query
-                if query:
-                    results = await search_memory(query)
-                    print(results)
-                else:
-                    print("Please specify what to search for, e.g., 'memory ETH trades'")
-            else:
-                await handle_command(cmd)
-
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"Error: {str(e)}")
-            # Store error in memory for debugging
-            await hyv.store_chat_memory(
-                agent_name="CryptoAgent",
-                message=f"Error occurred: {str(e)}",
-                role="system"
-            )
-
-    # Graceful shutdown
-    print("\nShutting down CryptoAgent...")
+    try:
+        # Run the agent with monitoring and natural language support
+        await hyv.run_agent_with_monitoring("TradingAgent")
+    except KeyboardInterrupt:
+        print("\nGracefully shutting down...")
+    except Exception as e:
+        print(f"\nError: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    # Load environment variables
+    load_dotenv()
+    
+    # Run the example
+    asyncio.run(main())

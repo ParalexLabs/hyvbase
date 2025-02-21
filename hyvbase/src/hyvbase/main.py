@@ -11,6 +11,7 @@ from hyvbase.agents.dex_agent import DEXAgent
 from hyvbase.agents.types import ZeroShotAgent, ReActAgent, ConversationalAgent
 from hyvbase.analytics import OperationAnalytics
 from hyvbase.config import HyvBaseConfig
+from hyvbase.utils.nlp import create_parser
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.memory import ConversationBufferMemory
 from dotenv import load_dotenv
@@ -23,6 +24,7 @@ from vectrs.database import VectorDBManager
 from vectrs.database.vectrbase import SimilarityMetric, IndexType
 import numpy as np
 import logging
+import time
 
 # Disable OpenAI and httpx logging
 logging.getLogger('openai').setLevel(logging.ERROR)
@@ -63,6 +65,14 @@ class HyvBase:
             os.environ["VECTRS_DB_PATH"] = str(self.data_dir / "vector_store.db")
             self.db_manager = VectorDBManager()
             self._init_vector_db()
+
+        self.memory_cache = {}
+        self.memory_config = {
+            'max_cache_size': 1000,  # Maximum number of items in cache
+            'cache_ttl': 3600,  # Time to live for cache items in seconds
+            'cleanup_interval': 300,  # Cleanup interval in seconds
+        }
+        self._start_memory_cleanup()
 
     def _init_vector_db(self):
         """Initialize default vector databases for chat history and transactions"""
@@ -278,6 +288,9 @@ class HyvBase:
         if not agent:
             raise ValueError(f"Agent {agent_name} not found")
 
+        # Initialize command parser
+        self.cmd_parser = create_parser()
+
         # Start monitoring task
         monitoring_task = asyncio.create_task(
             self._autonomous_monitoring(agent)
@@ -285,33 +298,58 @@ class HyvBase:
         self.active_tasks[f"{agent_name}_monitoring"] = monitoring_task
 
         print(f"\nAgent {agent_name} is ready!")
-        print("Commands:")
-        print("- 'auto on/off' to toggle autonomous mode")
-        print("- 'monitor' to get market update")
-        print("- 'exit' to quit\n")
+        print(self.cmd_parser.get_help())
 
         while True:
             try:
-                command = input("You: ").strip().lower()
+                command = input("\nWhat would you like to do? ").strip()
                 
-                if command == 'exit':
+                # Parse natural language into structured command
+                parsed_cmd, cmd_info = self.cmd_parser.parse_command(command)
+                
+                if parsed_cmd == 'exit':
+                    print("\nGoodbye!")
                     break
-                elif command == 'auto on':
+                elif parsed_cmd == 'help':
+                    print(self.cmd_parser.get_help())
+                    continue
+                elif parsed_cmd == 'auto on':
                     agent.autonomous_mode = True
                     print(f"\nAgent: Autonomous mode enabled. I'll monitor the market and suggest trades.")
-                elif command == 'auto off':
+                elif parsed_cmd == 'auto off':
                     agent.autonomous_mode = False
                     print(f"\nAgent: Autonomous mode disabled. I'll only respond to your commands.")
-                elif command == 'monitor':
+                elif parsed_cmd == 'monitor':
                     await self._market_update(agent)
+                elif parsed_cmd.startswith('memory'):
+                    if cmd_info['subtype'] == 'chat':
+                        await self._show_chat_history(agent_name)
+                    else:
+                        await self._show_transaction_history(agent_name)
                 else:
-                    response = await agent.process_command(command)
+                    response = await agent.process_command(parsed_cmd)
                     print(f"\nAgent: {response}\n")
+                    
+                    # Store the interaction in memory
+                    await self.store_chat_memory(agent_name, command, "user")
+                    await self.store_chat_memory(agent_name, response, "agent")
+                    
+                    # Store transaction if it's a trade
+                    if cmd_info.get('type') == 'trade':
+                        await self.store_transaction(agent_name, {
+                            'type': cmd_info['action'],
+                            'token_in': cmd_info['token_in'],
+                            'token_out': cmd_info['token_out'],
+                            'amount': cmd_info['amount'],
+                            'response': response,
+                            'timestamp': datetime.now().isoformat()
+                        })
                     
             except KeyboardInterrupt:
                 break
             except Exception as e:
                 print(f"\nError: {str(e)}\n")
+                await self.store_chat_memory(agent_name, str(e), "error")
 
         # Cleanup
         monitoring_task.cancel()
@@ -321,15 +359,23 @@ class HyvBase:
             pass
 
     async def _autonomous_monitoring(self, agent):
-        """Background market monitoring and analysis"""
+        """Background market monitoring and analysis with memory optimization"""
         while True:
             try:
                 if getattr(agent, 'autonomous_mode', False):
-                    await self._market_update(agent)
+                    # Get market update
+                    market_data = await self._market_update(agent)
+                    
+                    if market_data:
+                        # Store market data in memory
+                        await self.store_transaction(agent.name, {
+                            'type': 'market_update',
+                            'data': market_data
+                        })
                     
                     if agent.autonomous_config.get("auto_trading"):
                         await self._analyze_trading_opportunity(agent)
-                        
+                    
                 interval = agent.autonomous_config.get("monitoring_interval", 60)
                 await asyncio.sleep(interval)
                 
@@ -552,6 +598,121 @@ class HyvBase:
             return results
         except Exception as e:
             return []
+
+    def _start_memory_cleanup(self):
+        """Start background memory cleanup task"""
+        async def cleanup_task():
+            while True:
+                try:
+                    await self._cleanup_memory()
+                    await asyncio.sleep(self.memory_config['cleanup_interval'])
+                except Exception:
+                    await asyncio.sleep(60)  # Retry after a minute if cleanup fails
+        
+        asyncio.create_task(cleanup_task())
+
+    async def _cleanup_memory(self):
+        """Clean up expired cache items"""
+        current_time = time.time()
+        expired_keys = []
+        
+        for key, item in self.memory_cache.items():
+            if current_time - item['timestamp'] > self.memory_config['cache_ttl']:
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            del self.memory_cache[key]
+
+        # If still over limit, remove oldest items
+        while len(self.memory_cache) > self.memory_config['max_cache_size']:
+            oldest_key = min(self.memory_cache.items(), key=lambda x: x[1]['timestamp'])[0]
+            del self.memory_cache[oldest_key]
+
+    async def store_chat_memory(self, agent_name: str, message: str, role: str):
+        """Store chat message in memory cache"""
+        key = f"{agent_name}:{role}:{int(time.time())}"
+        self.memory_cache[key] = {
+            'message': message,
+            'timestamp': time.time(),
+            'type': 'chat'
+        }
+        
+        # Trigger cleanup if cache is getting too large
+        if len(self.memory_cache) >= self.memory_config['max_cache_size']:
+            await self._cleanup_memory()
+
+    async def store_transaction(self, agent_name: str, tx_data: dict):
+        """Store transaction data in memory cache"""
+        key = f"{agent_name}:tx:{int(time.time())}"
+        self.memory_cache[key] = {
+            'data': tx_data,
+            'timestamp': time.time(),
+            'type': 'transaction'
+        }
+        
+        # Trigger cleanup if cache is getting too large
+        if len(self.memory_cache) >= self.memory_config['max_cache_size']:
+            await self._cleanup_memory()
+
+    async def query_memory(self, query: str, memory_type: str = None, time_range: int = None) -> List[Dict]:
+        """Query memory cache with filters"""
+        current_time = time.time()
+        results = []
+        
+        for item in self.memory_cache.values():
+            # Apply time range filter if specified
+            if time_range and (current_time - item['timestamp']) > time_range:
+                continue
+                
+            # Apply type filter if specified
+            if memory_type and item.get('type') != memory_type:
+                continue
+                
+            # Simple text search in message/data
+            content = item.get('message') or str(item.get('data'))
+            if query.lower() in content.lower():
+                results.append(item)
+        
+        return results
+
+    async def _show_chat_history(self, agent_name: str, limit: int = 5):
+        """Show recent chat history"""
+        recent_chats = await self.query_chat_history(
+            query="recent messages",
+            agent_name=agent_name,
+            k=limit
+        )
+        if recent_chats:
+            print("\nRecent chat history:")
+            for chat in recent_chats:
+                metadata = chat['metadata']
+                print(f"\n{metadata['role'].capitalize()}: {metadata['message']}")
+                print(f"Time: {metadata['timestamp']}")
+        else:
+            print("\nNo recent chat history found")
+
+    async def _show_transaction_history(self, agent_name: str, limit: int = 5):
+        """Show recent transaction history"""
+        recent_trades = await self.query_transactions(
+            query="recent trades",
+            agent_name=agent_name,
+            k=limit
+        )
+        if recent_trades:
+            print("\nRecent transactions:")
+            for trade in recent_trades:
+                metadata = trade['metadata']
+                tx_data = metadata['transaction']
+                print(f"\nType: {tx_data['type']}")
+                if 'token_in' in tx_data:
+                    print(f"Token In: {tx_data['token_in']}")
+                    print(f"Token Out: {tx_data['token_out']}")
+                    print(f"Amount: {tx_data['amount']}")
+                if 'result' in tx_data:
+                    print(f"Result: {tx_data['result']}")
+                print(f"Time: {tx_data['timestamp']}")
+        else:
+            print("\nNo recent transactions found")
 
 if __name__ == "__main__":
     print("HyvBase framework loaded. Import and use HyvBase class to create agents.") 

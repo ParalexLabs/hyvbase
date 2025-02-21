@@ -1,6 +1,6 @@
 # HyvBase Documentation
 
-HyvBase is a framework for building intelligent agents that can interact with StarkNet blockchain and social media platforms. It provides a simple way to create automated trading and social media management solutions.
+HyvBase is a framework for building intelligent agents that can interact with blockchain protocols and the Internet. It provides a simple way to create automated trading and social media management solutions through AI agents.
 
 ## Installation
 
