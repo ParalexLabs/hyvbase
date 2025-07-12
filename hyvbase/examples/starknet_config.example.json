@@ -1,0 +1,29 @@
+{
+  "starknet": {
+    "private_key": "0x123456789abcdef123456789abcdef123456789abcdef123456789abcdef123456",
+    "account_address": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    "rpc_url": "https://starknet-mainnet.public.blastapi.io",
+    "network": "mainnet",
+    "max_fee": 1000000000000000,
+    "timeout": 30,
+    "retry_attempts": 3
+  },
+  "social_media": {
+    "twitter": {
+      "api_key": "your_twitter_api_key",
+      "api_secret": "your_twitter_api_secret",
+      "access_token": "your_twitter_access_token",
+      "access_token_secret": "your_twitter_access_token_secret"
+    }
+  },
+  "dex": {
+    "slippage_tolerance": 0.005,
+    "max_price_impact": 0.05,
+    "default_gas_limit": 1000000
+  },
+  "security": {
+    "require_confirmation_for_transfers": true,
+    "max_transfer_amount": 1000.0,
+    "whitelist_addresses": []
+  }
+}
