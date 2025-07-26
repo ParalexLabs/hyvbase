@@ -1,6 +1,6 @@
 # StarkNet Tool Adapter Examples
 
-This directory contains comprehensive examples showing how to integrate the StarkNet tools with the unified HyvBase framework.
+Welcome to the StarkNet Tool Adapter Examples! This directory contains a range of examples illustrating how to integrate StarkNet tools with the unified HyvBase framework, providing a solid foundation for blockchain and social media integration.
 
 ## Files Overview
 
@@ -96,6 +96,7 @@ config = {
 ```
 
 ## Supported Commands
+Explore a variety of powerful commands supported by the StarkNet Tool Adapter:
 
 ### DEX Operations
 - `quote ETH USDC 1.0` - Get price quote for token swap
@@ -114,7 +115,8 @@ config = {
 - `mint collection_address` - Mint NFT
 - `nft info token_id` - Get NFT information
 
-## Safety Features
+## Safety & Security Features
+The tools come equipped with robust safety and security features to ensure smooth and secure operation.
 
 ### Validation
 - Command syntax validation
